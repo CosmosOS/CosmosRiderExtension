@@ -1,0 +1,84 @@
+<idea-plugin>
+    <id>com.cosmosos.rider</id>
+    <name>Cosmos OS</name>
+    <vendor url="https://github.com/AzulMusic/CosmosOS">Cosmos OS</vendor>
+    <description><![CDATA[
+        Development toolkit for building bare-metal OS kernels with Cosmos OS gen3.
+        <br/>
+        <ul>
+            <li>Create new kernel projects from templates</li>
+            <li>Build kernels to bootable ISO images</li>
+            <li>Run kernels in QEMU emulator</li>
+            <li>Debug with GDB</li>
+            <li>Manage project properties and QEMU configuration</li>
+            <li>Check and install required development tools</li>
+        </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectService
+            serviceImplementation="com.cosmosos.rider.services.CosmosProjectService"/>
+
+        <toolWindow
+            id="Cosmos"
+            anchor="right"
+            icon="AllIcons.Nodes.Module"
+            factoryClass="com.cosmosos.rider.toolwindow.CosmosToolWindowFactory"
+            conditionClass="com.cosmosos.rider.toolwindow.CosmosToolWindowCondition"/>
+
+        <postStartupActivity
+            implementation="com.cosmosos.rider.CosmosStartupActivity"/>
+    </extensions>
+
+    <actions>
+        <group id="Cosmos.MainMenu" text="Cosmos" popup="true">
+            <add-to-group group-id="MainMenu" anchor="after" relative-to-action="ToolsMenu"/>
+
+            <action id="Cosmos.NewProject"
+                    class="com.cosmosos.rider.actions.NewProjectAction"
+                    text="New Kernel Project"
+                    description="Create a new Cosmos kernel project"
+                    icon="AllIcons.General.Add"/>
+            <separator/>
+            <action id="Cosmos.Build"
+                    class="com.cosmosos.rider.actions.BuildAction"
+                    text="Build"
+                    description="Build the kernel project"
+                    icon="AllIcons.Actions.Compile"/>
+            <action id="Cosmos.Run"
+                    class="com.cosmosos.rider.actions.RunAction"
+                    text="Run"
+                    description="Run the kernel in QEMU"
+                    icon="AllIcons.Actions.Execute"/>
+            <action id="Cosmos.Debug"
+                    class="com.cosmosos.rider.actions.DebugAction"
+                    text="Debug"
+                    description="Debug the kernel with GDB"
+                    icon="AllIcons.Actions.StartDebugger"/>
+            <separator/>
+            <action id="Cosmos.Clean"
+                    class="com.cosmosos.rider.actions.CleanAction"
+                    text="Clean"
+                    description="Remove build outputs"
+                    icon="AllIcons.Actions.GC"/>
+            <action id="Cosmos.Properties"
+                    class="com.cosmosos.rider.actions.PropertiesAction"
+                    text="Project Properties"
+                    description="Edit project properties"
+                    icon="AllIcons.General.Settings"/>
+            <separator/>
+            <action id="Cosmos.CheckTools"
+                    class="com.cosmosos.rider.actions.CheckToolsAction"
+                    text="Check Tools"
+                    description="Check installed development tools"
+                    icon="AllIcons.Actions.Find"/>
+            <action id="Cosmos.InstallTools"
+                    class="com.cosmosos.rider.actions.InstallToolsAction"
+                    text="Install Tools"
+                    description="Install required development tools"
+                    icon="AllIcons.Actions.Download"/>
+        </group>
+    </actions>
+</idea-plugin>
