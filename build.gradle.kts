@@ -33,9 +33,11 @@ intellijPlatform {
             <ul>
                 <li>Create new kernel projects from templates</li>
                 <li>Build kernels to bootable ISO images</li>
-                <li>Run kernels in QEMU emulator</li>
-                <li>Debug with GDB</li>
-                <li>Manage project properties and QEMU configuration</li>
+                <li>Run kernels in QEMU from the Run/Debug toolbar</li>
+                <li>Debug with GDB: C# breakpoints, stepping, variables and watches</li>
+                <li>Live kernel threads, GC and memory views while debugging</li>
+                <li>Configure QEMU devices, disks and port forwards from the project properties</li>
+                <li>Run the Cosmos kernel test suites</li>
                 <li>Check and install required development tools</li>
             </ul>
         """.trimIndent()
@@ -47,7 +49,7 @@ intellijPlatform {
 
         vendor {
             name = "Cosmos OS"
-            url = "https://github.com/AzulMusic/CosmosOS"
+            url = "https://github.com/CosmosOS"
         }
     }
 }
