@@ -1,50 +1,40 @@
 package com.cosmosos.rider.actions
 
-import com.cosmosos.rider.services.CosmosProjectService
-import com.intellij.openapi.actionSystem.ActionUpdateThread
-import com.intellij.openapi.actionSystem.AnAction
+import com.cosmosos.rider.util.CosmosNotifications
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.vfs.VfsUtil
 import java.io.File
 
-class CleanAction : AnAction() {
-    override fun getActionUpdateThread() = ActionUpdateThread.BGT
-
+class CleanAction : CosmosProjectAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val service = CosmosProjectService.getInstance(project)
-        val projectInfo = service.getProjectInfo()
+        val info = CosmosCommands.projectInfoOrError(project, "Clean Error") ?: return
 
-        if (projectInfo == null) {
-            Messages.showErrorDialog(project, "No Cosmos project found", "Clean Error")
+        if (Messages.showYesNoDialog(project, "Delete all build outputs?", "Clean Build", Messages.getWarningIcon()) != Messages.YES) {
             return
         }
 
-        val confirm = Messages.showYesNoDialog(
-            project,
-            "Delete all build outputs?",
-            "Clean Build",
-            Messages.getWarningIcon()
-        )
-        if (confirm != Messages.YES) return
+        object : Task.Backgroundable(project, "Cleaning build outputs", false) {
+            private var cleaned = 0
 
-        val dirsToClean = listOf("output-x64", "output-arm64", "bin", "obj")
-        var cleaned = 0
-
-        for (dir in dirsToClean) {
-            val dirFile = File(projectInfo.projectDir, dir)
-            if (dirFile.exists()) {
-                dirFile.deleteRecursively()
-                cleaned++
+            override fun run(indicator: ProgressIndicator) {
+                for (dir in listOf("output-x64", "output-arm64", "bin", "obj")) {
+                    val file = File(info.projectDir, dir)
+                    if (file.exists()) {
+                        indicator.text = "Deleting $dir"
+                        file.deleteRecursively()
+                        cleaned++
+                    }
+                }
+                VfsUtil.markDirtyAndRefresh(true, true, true, File(info.projectDir))
             }
-        }
 
-        Messages.showInfoMessage(project, "Cleaned $cleaned directories", "Clean Complete")
-    }
-
-    override fun update(e: AnActionEvent) {
-        val project = e.project
-        e.presentation.isEnabled = project != null &&
-                CosmosProjectService.getInstance(project).isCosmosProject()
+            override fun onSuccess() {
+                CosmosNotifications.info(project, "Cleaned $cleaned directories")
+            }
+        }.queue()
     }
 }

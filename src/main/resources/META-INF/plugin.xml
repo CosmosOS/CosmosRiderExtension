@@ -1,16 +1,18 @@
 <idea-plugin>
     <id>com.cosmosos.rider</id>
     <name>Cosmos OS</name>
-    <vendor url="https://github.com/AzulMusic/CosmosOS">Cosmos OS</vendor>
+    <vendor url="https://github.com/CosmosOS">Cosmos OS</vendor>
     <description><![CDATA[
         Development toolkit for building bare-metal OS kernels with Cosmos OS gen3.
         <br/>
         <ul>
             <li>Create new kernel projects from templates</li>
             <li>Build kernels to bootable ISO images</li>
-            <li>Run kernels in QEMU emulator</li>
-            <li>Debug with GDB</li>
-            <li>Manage project properties and QEMU configuration</li>
+            <li>Run kernels in QEMU from the Run/Debug toolbar</li>
+            <li>Debug with GDB: C# breakpoints, stepping, variables and watches</li>
+            <li>Live kernel threads, GC and memory views while debugging</li>
+            <li>Configure QEMU devices, disks and port forwards from the project properties</li>
+            <li>Run the Cosmos kernel test suites</li>
             <li>Check and install required development tools</li>
         </ul>
     ]]></description>
@@ -18,18 +20,21 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <projectService
-            serviceImplementation="com.cosmosos.rider.services.CosmosProjectService"/>
-
         <toolWindow
             id="Cosmos"
             anchor="right"
-            icon="AllIcons.Nodes.Module"
+            icon="/icons/cosmos.svg"
             factoryClass="com.cosmosos.rider.toolwindow.CosmosToolWindowFactory"
             conditionClass="com.cosmosos.rider.toolwindow.CosmosToolWindowCondition"/>
 
         <postStartupActivity
             implementation="com.cosmosos.rider.CosmosStartupActivity"/>
+
+        <notificationGroup id="Cosmos OS" displayType="BALLOON"/>
+
+        <configurationType implementation="com.cosmosos.rider.run.CosmosRunConfigurationType"/>
+        <configurationType implementation="com.cosmosos.rider.testing.CosmosTestRunConfigurationType"/>
+        <programRunner implementation="com.cosmosos.rider.run.CosmosDebugRunner" order="first"/>
     </extensions>
 
     <actions>
@@ -44,23 +49,23 @@
             <separator/>
             <action id="Cosmos.Build"
                     class="com.cosmosos.rider.actions.BuildAction"
-                    text="Build"
+                    text="Build Kernel"
                     description="Build the kernel project"
                     icon="AllIcons.Actions.Compile"/>
             <action id="Cosmos.Run"
                     class="com.cosmosos.rider.actions.RunAction"
-                    text="Run"
+                    text="Run in QEMU"
                     description="Run the kernel in QEMU"
                     icon="AllIcons.Actions.Execute"/>
             <action id="Cosmos.Debug"
                     class="com.cosmosos.rider.actions.DebugAction"
-                    text="Debug"
-                    description="Debug the kernel with GDB"
+                    text="Debug in QEMU"
+                    description="Debug the kernel in QEMU with GDB"
                     icon="AllIcons.Actions.StartDebugger"/>
             <separator/>
             <action id="Cosmos.Clean"
                     class="com.cosmosos.rider.actions.CleanAction"
-                    text="Clean"
+                    text="Clean Build"
                     description="Remove build outputs"
                     icon="AllIcons.Actions.GC"/>
             <action id="Cosmos.Properties"

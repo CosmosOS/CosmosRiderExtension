@@ -1,74 +1,94 @@
 package com.cosmosos.rider.actions
 
+import com.cosmosos.rider.services.CosmosProjectService
+import com.cosmosos.rider.util.CosmosNotifications
 import com.cosmosos.rider.util.PlatformUtil
 import com.cosmosos.rider.util.ProjectConfig
-import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.ide.impl.ProjectUtil
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
-import com.intellij.openapi.fileChooser.FileChooserFactory
-import com.intellij.openapi.project.ProjectManager
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.InputValidator
 import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.util.ThrowableComputable
+import com.intellij.openapi.util.SystemInfo
 import java.io.File
+import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 
-class NewProjectAction : AnAction() {
+class NewProjectAction : DumbAwareAction() {
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project
 
-        // Check if cosmos is installed
         if (!PlatformUtil.isCosmosToolsInstalled) {
             val install = Messages.showYesNoDialog(
                 project,
-                "Cosmos Tools is required to create projects. Install now?\n\nRun: dotnet tool install -g Cosmos.Tools && cosmos install",
+                "Cosmos Tools is required to create projects. Install now?",
                 "Cosmos Tools Required",
                 Messages.getWarningIcon()
             )
             if (install != Messages.YES) return
-
-            Messages.showInfoMessage(
-                project,
-                "Run the following command in a terminal:\n\ndotnet tool install -g Cosmos.Tools && cosmos install\n\nThen try creating the project again.",
-                "Install Cosmos Tools"
-            )
+            if (project != null) {
+                CosmosCommands.runInstaller(project, "Cosmos Setup", "dotnet tool install -g Cosmos.Tools && cosmos install")
+                Messages.showInfoMessage(
+                    project,
+                    "Installing Cosmos Tools. Run \"New Kernel Project\" again once the installation completes.",
+                    "Install Cosmos Tools"
+                )
+            } else {
+                Messages.showInfoMessage(
+                    "Run the following command in a terminal, then try again:\n\ndotnet tool install -g Cosmos.Tools && cosmos install",
+                    "Install Cosmos Tools"
+                )
+            }
             return
         }
 
-        // Check if templates are installed
-        val templatesInstalled = PlatformUtil.execCommand("dotnet new list cosmos-kernel")
-            ?.contains("cosmos-kernel") == true
-
+        val templatesInstalled = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            ThrowableComputable<Boolean, RuntimeException> {
+                PlatformUtil.execCommand("dotnet new list cosmos-kernel", timeoutMs = 30000)?.contains("cosmos-kernel") == true
+            },
+            "Checking Cosmos templates", true, project
+        )
         if (!templatesInstalled) {
-            Messages.showInfoMessage(
-                project,
-                "Run the following command in a terminal:\n\ndotnet new install Cosmos.Build.Templates\n\nThen try creating the project again.",
-                "Install Cosmos Templates"
-            )
+            if (project != null) {
+                CosmosCommands.runInstaller(project, "Cosmos Setup", "dotnet new install Cosmos.Build.Templates")
+                Messages.showInfoMessage(
+                    project,
+                    "Installing Cosmos templates. Run \"New Kernel Project\" again once the installation completes.",
+                    "Install Cosmos Templates"
+                )
+            } else {
+                Messages.showInfoMessage(
+                    "Run the following command in a terminal, then try again:\n\ndotnet new install Cosmos.Build.Templates",
+                    "Install Cosmos Templates"
+                )
+            }
             return
         }
 
-        // Ask for project name
         val projectName = Messages.showInputDialog(
             project,
             "Enter the kernel project name:",
             "New Cosmos Kernel Project",
             Messages.getQuestionIcon(),
             "MyKernel",
-            null
+            object : InputValidator {
+                override fun checkInput(inputString: String) = NAME_REGEX.matches(inputString)
+                override fun canClose(inputString: String) = checkInput(inputString)
+            }
         ) ?: return
 
-        if (!projectName.matches(Regex("^[a-zA-Z][a-zA-Z0-9_]*$"))) {
-            Messages.showErrorDialog(
-                project,
-                "Project name must start with a letter and contain only letters, numbers, and underscores.",
-                "Invalid Project Name"
-            )
-            return
-        }
-
-        // Ask for architecture
-        val archOptions = arrayOf("x64 (Intel/AMD 64-bit)", "arm64 (ARM 64-bit)")
+        val archOptions = arrayOf("x64 — Intel/AMD 64-bit", "arm64 — ARM 64-bit")
         val archChoice = Messages.showDialog(
             project,
-            "Select target architecture:",
+            "Select target architecture:\n\nx64 is recommended for most users; arm64 targets Raspberry Pi and Apple Silicon VMs.",
             "Target Architecture",
             archOptions,
             0,
@@ -77,59 +97,93 @@ class NewProjectAction : AnAction() {
         if (archChoice < 0) return
         val arch = if (archChoice == 1) "arm64" else "x64"
 
-        // Ask for location
-        val descriptor = FileChooserDescriptorFactory.createSingleFolderDescriptor()
-        descriptor.title = "Select Project Location"
-        val chosen = FileChooserFactory.getInstance().createPathChooser(descriptor, project, null)
-        var projectPath: String? = null
+        val basePath = project?.basePath
+        val locationOptions = if (basePath != null) {
+            arrayOf("Current Folder", "New Folder", "Choose Location…")
+        } else {
+            arrayOf("Choose Location…")
+        }
+        val locationChoice = Messages.showDialog(
+            project,
+            if (basePath != null) "Where should the project be created?\n\nCurrent folder: $basePath" else "Where should the project be created?",
+            "Project Location",
+            locationOptions,
+            0,
+            Messages.getQuestionIcon()
+        )
+        if (locationChoice < 0) return
 
-        chosen.choose(null) { files ->
-            if (files.isNotEmpty()) {
-                projectPath = File(files[0].path, projectName).absolutePath
+        val createInCurrentDir = basePath != null && locationChoice == 0
+        val projectPath = when {
+            createInCurrentDir -> basePath!!
+            basePath != null && locationChoice == 1 -> File(basePath, projectName).absolutePath
+            else -> {
+                val descriptor = FileChooserDescriptorFactory.createSingleFolderDescriptor()
+                    .withTitle("Select Project Location")
+                val folder = FileChooser.chooseFile(descriptor, project, null) ?: return
+                File(folder.path, projectName).absolutePath
             }
         }
 
-        val path = projectPath ?: return
-
-        // Create the project
-        try {
-            val dir = File(path)
-            dir.mkdirs()
-
-            val cmd = "dotnet new cosmos-kernel -n $projectName --force"
-            val result = PlatformUtil.execCommand(cmd, workDir = path, timeoutMs = 30000)
-
-            if (result != null) {
-                // Save architecture config
-                val cosmosDir = File(path, ".cosmos")
-                cosmosDir.mkdirs()
-                val config = com.cosmosos.rider.util.CosmosConfigJson(
-                    targetArch = arch,
-                    qemu = ProjectConfig.getDefaultQemuConfig(arch)
-                )
-                ProjectConfig.saveCosmosConfig(path, config)
-
-                Messages.showInfoMessage(
-                    project,
-                    "Cosmos kernel project '$projectName' created successfully!\nTarget: $arch\nLocation: $path\n\nOpen this folder in Rider to start developing.",
-                    "Project Created"
-                )
-
-                // Try to open the project
-                ProjectManager.getInstance().loadAndOpenProject(path)
-            } else {
-                Messages.showErrorDialog(
-                    project,
-                    "Failed to create project. Make sure Cosmos templates are installed:\ndotnet new install Cosmos.Build.Templates",
-                    "Project Creation Failed"
-                )
-            }
-        } catch (ex: Exception) {
+        val result = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            ThrowableComputable<Pair<Int, String>, RuntimeException> {
+                createProject(projectPath, projectName, createInCurrentDir)
+            },
+            "Creating Cosmos kernel project", false, project
+        )
+        if (result.first != 0) {
             Messages.showErrorDialog(
                 project,
-                "Failed to create project: ${ex.message}",
-                "Error"
+                "Failed to create project (exit code ${result.first}).\n\n${result.second.takeLast(2000)}",
+                "Project Creation Failed"
             )
+            return
         }
+
+        ProjectConfig.writeNewProjectConfig(projectPath, arch)
+
+        val csproj = File(projectPath, "$projectName.csproj")
+        val version = csproj.takeIf { it.isFile }?.readText()
+            ?.let { Regex("""<PackageReference\s+Include="Cosmos.Kernel"\s+Version="([^"]+)"""").find(it)?.groupValues?.get(1) }
+        val created = "Cosmos kernel \"$projectName\" created successfully! (Target: $arch${version?.let { ", Cosmos gen3 v$it" } ?: ""})"
+
+        if (createInCurrentDir && project != null) {
+            CosmosProjectService.getInstance(project).fireProjectChanged()
+            CosmosNotifications.info(project, created)
+        } else {
+            CosmosNotifications.info(project, created)
+            ProjectUtil.openOrImport(Path.of(if (csproj.isFile) csproj.absolutePath else projectPath), project, false)
+        }
+    }
+
+    private fun createProject(projectPath: String, projectName: String, inCurrentDir: Boolean): Pair<Int, String> {
+        return try {
+            File(projectPath).mkdirs()
+            // -o . keeps the files in the chosen folder instead of a subfolder.
+            val args = mutableListOf(PlatformUtil.findCommand("dotnet") ?: "dotnet", "new", "cosmos-kernel", "-n", projectName)
+            if (inCurrentDir) args += listOf("-o", ".")
+            args += "--force"
+            val process = ProcessBuilder(args)
+                .directory(File(projectPath))
+                .redirectErrorStream(true)
+                .redirectInput(ProcessBuilder.Redirect.from(File(if (SystemInfo.isWindows) "NUL" else "/dev/null")))
+                .apply { environment().putAll(PlatformUtil.getEnvWithDotnetTools()) }
+                .start()
+            val output = StringBuilder()
+            val reader = Thread { runCatching { output.append(process.inputStream.bufferedReader().readText()) } }
+                .apply { isDaemon = true; start() }
+            if (!process.waitFor(2, TimeUnit.MINUTES)) {
+                process.destroyForcibly()
+                return -1 to "dotnet new timed out"
+            }
+            reader.join(1000)
+            process.exitValue() to output.toString()
+        } catch (ex: Exception) {
+            -1 to (ex.message ?: ex.toString())
+        }
+    }
+
+    companion object {
+        private val NAME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9_]*$")
     }
 }
