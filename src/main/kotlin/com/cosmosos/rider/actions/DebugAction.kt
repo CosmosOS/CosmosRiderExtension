@@ -155,10 +155,9 @@ class DebugAction : AnAction() {
                |
                |ELF file: $elfPath
                |
-               |To connect GDB, create a "GDB Remote Debug" run configuration in Rider:
-               |  - Target: Remote
-               |  - Host: localhost
-               |  - Port: $gdbPort
+               |To connect GDB, create a "Remote Debug" run configuration in Rider:
+               |  - Debugger: Bundled GDB
+               |  - 'target remote' args: : localhost:$gdbPort
                |  - Symbol file: $elfPath
                |
                |Or run manually:
