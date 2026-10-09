@@ -17,7 +17,9 @@ repositories {
 dependencies {
     intellijPlatform {
         rider(providers.gradleProperty("platformVersion"))
+        testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
     }
+    testImplementation("junit:junit:4.13.2")
 }
 
 intellijPlatform {
@@ -55,6 +57,14 @@ kotlin {
 }
 
 tasks {
+    test {
+        // DebuggerSmokeTest boots a real kernel under QEMU and gdb; it only
+        // runs when COSMOS_SMOKE_ROOT points at a nativeaot-patcher checkout.
+        System.getenv("COSMOS_SMOKE_ROOT")?.let {
+            environment("COSMOS_SMOKE_ROOT", it)
+            testLogging.showStandardStreams = true
+        }
+    }
     wrapper {
         gradleVersion = "9.0"
     }
