@@ -21,7 +21,7 @@ import com.intellij.xdebugger.XDebuggerManager
 
 /**
  * Debug executor for Cosmos kernels: boots `cosmos run --debug` (QEMU halted,
- * gdbstub on 1234) and opens a [CosmosDebugProcess] on it. The
+ * gdbstub on 1234, QMP on 4444) and opens a [CosmosDebugProcess] on it. The
  * session owns cosmos, so Stop takes QEMU and gdb down together.
  */
 class CosmosDebugRunner : GenericProgramRunner<RunnerSettings>() {
@@ -46,7 +46,14 @@ class CosmosDebugRunner : GenericProgramRunner<RunnerSettings>() {
             )
         }
 
-        val spec = CosmosLaunch.prepare(target, debug = true)
+        // QMP lets the kernel views read guest memory while it runs; without
+        // the port the session still debugs, just without those views.
+        val qmpPort = CosmosDebugProcess.QMP_PORT.takeUnless { PortUtil.isPortInUse(it) }
+        val spec = CosmosLaunch.prepare(
+            target,
+            debug = true,
+            qemuPassthrough = qmpPort?.let { listOf("-qmp", "tcp:127.0.0.1:$it,server,nowait") }.orEmpty()
+        )
 
         val handler = KillableColoredProcessHandler(spec.commandLine)
         ProcessTerminatedListener.attach(handler)
@@ -54,7 +61,7 @@ class CosmosDebugRunner : GenericProgramRunner<RunnerSettings>() {
         val session = try {
             XDebuggerManager.getInstance(project).startSession(environment, object : XDebugProcessStarter() {
                 override fun start(session: XDebugSession): XDebugProcess =
-                    CosmosDebugProcess(session, spec, elf, handler)
+                    CosmosDebugProcess(session, spec, elf, handler, qmpPort)
             })
         } catch (e: ExecutionException) {
             handler.destroyProcess()

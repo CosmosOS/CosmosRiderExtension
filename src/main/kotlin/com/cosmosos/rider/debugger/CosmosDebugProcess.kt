@@ -1,16 +1,24 @@
 package com.cosmosos.rider.debugger
 
+import com.cosmosos.rider.CosmosIcons
 import com.cosmosos.rider.debugger.mi.MiAsyncRecord
 import com.cosmosos.rider.debugger.mi.MiParser
 import com.cosmosos.rider.debugger.mi.MiResultRecord
 import com.cosmosos.rider.debugger.mi.MiSession
 import com.cosmosos.rider.debugger.mi.MiStreamRecord
 import com.cosmosos.rider.debugger.mi.MiTuple
+import com.cosmosos.rider.kernelviews.KernelGcPanel
+import com.cosmosos.rider.kernelviews.KernelLiveViews
+import com.cosmosos.rider.kernelviews.KernelMemoryPanel
+import com.cosmosos.rider.kernelviews.KernelThreadsPanel
+import com.cosmosos.rider.kernelviews.LiveReader
 import com.cosmosos.rider.run.CosmosLaunchSpec
 import com.cosmosos.rider.util.PlatformUtil
 import com.cosmosos.rider.util.PortUtil
 import com.intellij.execution.process.ProcessHandler
 import com.intellij.execution.process.ProcessOutputTypes
+import com.intellij.execution.ui.layout.PlaceInGrid
+import com.intellij.execution.ui.RunnerLayoutUi
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.logger
@@ -26,6 +34,7 @@ import com.intellij.xdebugger.breakpoints.XLineBreakpoint
 import com.intellij.xdebugger.breakpoints.XLineBreakpointType
 import com.intellij.xdebugger.evaluation.XDebuggerEditorsProvider
 import com.intellij.xdebugger.frame.XSuspendContext
+import com.intellij.xdebugger.ui.XDebugTabLayouter
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.CompletableFuture
@@ -40,17 +49,20 @@ import java.util.concurrent.atomic.AtomicBoolean
  * A Cosmos kernel debug session: `cosmos run --debug` boots the kernel with
  * QEMU's gdbstub waiting on port 1234, gdb attaches to it over MI, and Rider's
  * C# line breakpoints become gdb breakpoints (NativeAOT emits DWARF that maps
- * the kernel back to its .cs sources).
+ * the kernel back to its .cs sources). A QMP socket alongside feeds the live
+ * kernel views without pausing the guest.
  */
 class CosmosDebugProcess(
     session: XDebugSession,
     private val spec: CosmosLaunchSpec,
     private val elf: File,
-    private val cosmosHandler: ProcessHandler
+    private val cosmosHandler: ProcessHandler,
+    private val qmpPort: Int?
 ) : XDebugProcess(session) {
 
     companion object {
         const val GDB_PORT = 1234
+        const val QMP_PORT = 4444
         private const val MAX_CHILDREN = 500
         private const val DOTNET_LINE_BREAKPOINT_TYPE = "com.jetbrains.rider.debugger.breakpoint.DotNetLineBreakpointType"
         private val ACCESS_SPECIFIERS = setOf("public", "private", "protected")
@@ -62,6 +74,9 @@ class CosmosDebugProcess(
 
     @Volatile
     private var gdb: MiSession? = null
+
+    @Volatile
+    private var qmp: QmpClient? = null
 
     // Set once breakpoints are in and the guest has been let go; stops before
     // that belong to the attach itself.
@@ -89,6 +104,8 @@ class CosmosDebugProcess(
     private val byNumber = ConcurrentHashMap<Int, XLineBreakpoint<*>>()
     private val pendingOps = ConcurrentLinkedQueue<() -> CompletableFuture<*>>()
     private val varRoots = ConcurrentLinkedQueue<String>()
+
+    val liveViews = KernelLiveViews(::log)
 
     private val breakpointHandlers: Array<XBreakpointHandler<*>> = XBreakpointType.EXTENSION_POINT_NAME.extensionList
         .filter { it is XLineBreakpointType<*> && it.javaClass.name == DOTNET_LINE_BREAKPOINT_TYPE }
@@ -147,6 +164,13 @@ class CosmosDebugProcess(
         if (!PortUtil.waitForPort(GDB_PORT, 5000) { stopped.get() || cosmosHandler.isProcessTerminated }) {
             if (stopped.get()) return
             throw IOException("QEMU gdbstub on port $GDB_PORT did not come up within 5000ms")
+        }
+
+        if (qmpPort != null) {
+            connectQmp(qmpPort)
+        } else {
+            log("QMP port ${QMP_PORT} in use — live kernel views disabled this session.")
+            liveViews.start(null)
         }
 
         val located = GdbLocator.locate(target.arch) ?: throw IOException(
@@ -247,6 +271,42 @@ class CosmosDebugProcess(
         }
     }
 
+    private fun connectQmp(port: Int) {
+        log("QEMU launched with -qmp tcp:127.0.0.1:$port,server,nowait")
+        try {
+            if (!PortUtil.waitForPort(port, 5000) { stopped.get() }) throw IOException("QMP port $port did not come up")
+            val client = QmpClient("127.0.0.1", port)
+            client.connect(5000)
+            qmp = client
+            log("QMP connected on 127.0.0.1:$port")
+
+            // Resolve the snapshot statics up front so the views never need a
+            // gdb infcall.
+            val symbols = try {
+                ElfSymbols.resolve(elf, listOf(LiveReader.THREADS_SYMBOL, LiveReader.GC_SYMBOL, LiveReader.MEMORY_SYMBOL))
+            } catch (e: Exception) {
+                log("Could not read ELF symbols: ${e.message}")
+                emptyMap()
+            }
+            fun report(label: String, symbol: String, missing: String) {
+                val addr = symbols[symbol]
+                log(if (addr != null) "$label statics at 0x${java.lang.Long.toHexString(addr)}" else "$label symbol not found — $missing")
+            }
+            report("DebugLiveSnapshot", LiveReader.THREADS_SYMBOL, "falling back to gdb infcall.")
+            report("DebugLiveGCSnapshot", LiveReader.GC_SYMBOL, "GC live view will be empty.")
+            report("DebugLiveMemorySnapshot", LiveReader.MEMORY_SYMBOL, "memory live view will be empty.")
+
+            liveViews.start(
+                LiveReader(client, symbols[LiveReader.THREADS_SYMBOL], symbols[LiveReader.GC_SYMBOL], symbols[LiveReader.MEMORY_SYMBOL])
+            )
+        } catch (e: Exception) {
+            log("QMP unavailable: ${e.message}")
+            qmp?.close()
+            qmp = null
+            liveViews.start(null)
+        }
+    }
+
     // The NativeAOT pretty-printers ship inside the plugin; gdb needs a file.
     private fun prettyPrinterScript(): String? {
         return try {
@@ -322,6 +382,7 @@ class CosmosDebugProcess(
         val threadId = results.int("thread-id") ?: 1
         val top = results.tuple("frame")?.let { GdbStackFrame.from(this, threadId, it) }
         val context = GdbSuspendContext(this, threadId, top)
+        liveViews.onStopped { expression -> evaluate(expression, threadId) }
 
         if (reason == "breakpoint-hit") {
             val breakpoint = results.int("bkptno")?.let { byNumber[it] }
@@ -495,6 +556,8 @@ class CosmosDebugProcess(
         bootStop?.completeExceptionally(IOException("Debug session stopped"))
         ApplicationManager.getApplication().executeOnPooledThread {
             log("shutdown")
+            liveViews.dispose()
+            qmp?.close()
             gdb?.close()
             if (!cosmosHandler.isProcessTerminated) cosmosHandler.destroyProcess()
         }
@@ -526,12 +589,34 @@ class CosmosDebugProcess(
             CompletableFuture.allOf(*parts.toTypedArray()).thenApply { parts.flatMap { it.join() } }
         }
 
+    private fun evaluate(expression: String, threadId: Int): CompletableFuture<String> =
+        mi("-data-evaluate-expression --thread $threadId --frame 0 ${MiParser.quote(expression)}")
+            .thenApply { it.results.string("value").orEmpty() }
+
     // Varobjs live in gdb until deleted; roots are dropped on every resume.
     private fun clearVarRoots() {
         val mi = gdb ?: return
         while (true) {
             val name = varRoots.poll() ?: break
             mi.sendQuietly("-var-delete ${MiParser.quote(name)}")
+        }
+    }
+
+    // ---- UI ----------------------------------------------------------------
+
+    override fun createTabLayouter(): XDebugTabLayouter = object : XDebugTabLayouter() {
+        override fun registerAdditionalContent(ui: RunnerLayoutUi) {
+            val project = session.project
+            val tabs = listOf(
+                Triple("CosmosKernelThreads", "Kernel Threads", KernelThreadsPanel(project, liveViews)),
+                Triple("CosmosKernelGC", "Kernel GC", KernelGcPanel(project, liveViews)),
+                Triple("CosmosKernelMemory", "Kernel Memory", KernelMemoryPanel(project, liveViews))
+            )
+            for ((id, title, panel) in tabs) {
+                val content = ui.createContent(id, panel, title, CosmosIcons.Cosmos, null)
+                content.isCloseable = false
+                ui.addContent(content, 0, PlaceInGrid.center, false)
+            }
         }
     }
 }
