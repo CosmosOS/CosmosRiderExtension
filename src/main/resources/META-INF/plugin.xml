@@ -31,6 +31,7 @@
         <notificationGroup id="Cosmos OS" displayType="BALLOON"/>
 
         <configurationType implementation="com.cosmosos.rider.run.CosmosRunConfigurationType"/>
+        <configurationType implementation="com.cosmosos.rider.testing.CosmosTestRunConfigurationType"/>
         <programRunner implementation="com.cosmosos.rider.run.CosmosDebugRunner" order="first"/>
     </extensions>
 

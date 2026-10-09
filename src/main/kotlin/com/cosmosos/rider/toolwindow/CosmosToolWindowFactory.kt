@@ -1,5 +1,6 @@
 package com.cosmosos.rider.toolwindow
 
+import com.cosmosos.rider.testing.TestDiscovery
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
@@ -21,5 +22,10 @@ class CosmosToolWindowFactory : ToolWindowFactory, DumbAware {
 
         addTab("Project") { ProjectPanel(project, it) }
         addTab("Tools") { ToolsPanel(project, it) }
+        // The Testing tab only exists in the Cosmos repo itself, where the
+        // test kernels live under tests/Kernels.
+        if (TestDiscovery.findTestKernels(project.basePath).isNotEmpty()) {
+            addTab("Tests") { TestsPanel(project) }
+        }
     }
 }
