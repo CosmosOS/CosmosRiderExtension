@@ -106,6 +106,7 @@ class ProjectPanel(private val project: Project, parent: Disposable) : JPanel(Bo
                     ActionItem("Properties", "Edit project settings", "Cosmos.Properties", AllIcons.General.Settings),
                     ActionItem("Build", "Build for $archDesc", "Cosmos.Build", AllIcons.Actions.Compile),
                     ActionItem("Run", "Run in QEMU ($archLabel)", "Cosmos.Run", AllIcons.Actions.Execute),
+                    ActionItem("Debug", "Debug with GDB ($archLabel)", "Cosmos.Debug", AllIcons.Actions.StartDebugger),
                     ActionItem("Clean", "Remove build outputs", "Cosmos.Clean", AllIcons.Actions.GC)
                 ).forEach(listModel::addElement)
             }

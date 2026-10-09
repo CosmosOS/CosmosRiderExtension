@@ -31,6 +31,7 @@
         <notificationGroup id="Cosmos OS" displayType="BALLOON"/>
 
         <configurationType implementation="com.cosmosos.rider.run.CosmosRunConfigurationType"/>
+        <programRunner implementation="com.cosmosos.rider.run.CosmosDebugRunner" order="first"/>
     </extensions>
 
     <actions>
@@ -53,6 +54,11 @@
                     text="Run in QEMU"
                     description="Run the kernel in QEMU"
                     icon="AllIcons.Actions.Execute"/>
+            <action id="Cosmos.Debug"
+                    class="com.cosmosos.rider.actions.DebugAction"
+                    text="Debug in QEMU"
+                    description="Debug the kernel in QEMU with GDB"
+                    icon="AllIcons.Actions.StartDebugger"/>
             <separator/>
             <action id="Cosmos.Clean"
                     class="com.cosmosos.rider.actions.CleanAction"
