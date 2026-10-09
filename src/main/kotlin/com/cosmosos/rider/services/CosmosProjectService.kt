@@ -4,6 +4,7 @@ import com.cosmosos.rider.util.PlatformUtil
 import com.cosmosos.rider.util.ProjectConfig
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.project.Project
+import com.intellij.util.messages.Topic
 import java.io.File
 
 data class ProjectInfo(
@@ -13,46 +14,76 @@ data class ProjectInfo(
     val projectDir: String
 )
 
+fun interface CosmosProjectListener {
+    fun projectChanged()
+}
+
 @Service(Service.Level.PROJECT)
 class CosmosProjectService(private val project: Project) {
 
     companion object {
+        val TOPIC: Topic<CosmosProjectListener> =
+            Topic.create("Cosmos project changed", CosmosProjectListener::class.java)
+
+        // Fired when the installed toolchain may have changed.
+        val TOOLS_TOPIC: Topic<CosmosProjectListener> =
+            Topic.create("Cosmos tools changed", CosmosProjectListener::class.java)
+
+        private const val SCAN_TTL_MS = 10_000L
+
         fun getInstance(project: Project): CosmosProjectService =
             project.getService(CosmosProjectService::class.java)
     }
 
-    fun isCosmosProject(): Boolean {
-        val basePath = project.basePath ?: return false
-        return findCsprojFiles(File(basePath)).any { isCosmosProject(it) }
+    // Action updates ask on every repaint; the directory walk is cached so
+    // that stays cheap. An empty string means "scanned, nothing found".
+    @Volatile
+    private var cachedCsproj: Pair<Long, String>? = null
+
+    private fun findCosmosCsproj(): String? {
+        cachedCsproj?.let { (at, path) ->
+            if (System.currentTimeMillis() - at < SCAN_TTL_MS) return path.ifEmpty { null }
+        }
+        val basePath = project.basePath
+        val found = basePath?.let { findCsprojFiles(File(it)).firstOrNull(::isCosmosCsproj)?.absolutePath }
+        cachedCsproj = System.currentTimeMillis() to (found ?: "")
+        return found
     }
 
-    fun getProjectInfo(): ProjectInfo? {
-        val basePath = project.basePath ?: return null
+    fun isCosmosProject(): Boolean = findCosmosCsproj() != null
 
-        for (csproj in findCsprojFiles(File(basePath))) {
-            if (isCosmosProject(csproj)) {
-                val projectDir = csproj.parent
-                val config = ProjectConfig.loadCosmosConfig(projectDir)
-                return ProjectInfo(
-                    name = csproj.nameWithoutExtension,
-                    arch = config.targetArch ?: "x64",
-                    csprojPath = csproj.absolutePath,
-                    projectDir = projectDir
-                )
-            }
+    fun getProjectInfo(): ProjectInfo? {
+        val csproj = File(findCosmosCsproj() ?: return null)
+        if (!csproj.isFile) {
+            cachedCsproj = null
+            return null
         }
-        return null
+        val projectDir = csproj.parent
+        return ProjectInfo(
+            name = csproj.nameWithoutExtension,
+            arch = ProjectConfig.loadTargetArch(projectDir),
+            csprojPath = csproj.absolutePath,
+            projectDir = projectDir
+        )
+    }
+
+    // Tells the tool window (and anything else listening) that the project
+    // or its properties changed.
+    fun fireProjectChanged() {
+        cachedCsproj = null
+        project.messageBus.syncPublisher(TOPIC).projectChanged()
+    }
+
+    fun fireToolsChanged() {
+        project.messageBus.syncPublisher(TOOLS_TOPIC).projectChanged()
     }
 
     fun getCosmosToolsVersion(): String? {
-        return try {
-            val output = PlatformUtil.execCommand("dotnet tool list -g") ?: return null
-            output.lines()
-                .firstOrNull { it.lowercase().startsWith("cosmos.tools") }
-                ?.trim()?.split(Regex("\\s+"))?.getOrNull(1)
-        } catch (_: Exception) {
-            null
-        }
+        val output = PlatformUtil.execCommand("dotnet tool list -g") ?: return null
+        // Format: "cosmos.tools   3.0.37   cosmos"
+        return output.lines()
+            .firstOrNull { it.lowercase().startsWith("cosmos.tools") }
+            ?.trim()?.split(Regex("\\s+"))?.getOrNull(1)
     }
 
     data class ToolStatus(
@@ -62,89 +93,51 @@ class CosmosProjectService(private val project: Project) {
     )
 
     fun checkTools(): List<ToolStatus> {
-        val tools = mutableListOf<ToolStatus>()
-
         if (!PlatformUtil.isCosmosToolsInstalled) {
-            tools.add(checkCommand("dotnet", "dotnet --version", ".NET SDK"))
-            tools.add(ToolStatus("Cosmos Tools", false, "Not installed - run: dotnet tool install -g Cosmos.Tools"))
-            return tools
+            return listOf(ToolStatus("Cosmos Tools", false, "Not installed - run: dotnet tool install -g Cosmos.Tools"))
         }
 
-        // Add cosmos itself
-        val cosmosVersion = getCosmosToolsVersion()
-        tools.add(ToolStatus("Cosmos Tools", true, cosmosVersion ?: "Installed"))
+        // Refresh the shared cache (the debugger reads gdb's path from it).
+        val data = PlatformUtil.refreshToolsCheck()
+            ?: return listOf(ToolStatus("Cosmos Tools", false, "Check failed - reinstall Cosmos.Tools"))
 
-        // Use cosmos check --json
-        try {
-            val result = PlatformUtil.execCommand("cosmos check --json", timeoutMs = 10000)
-            if (result != null) {
-                val json = com.google.gson.JsonParser.parseString(result).asJsonObject
-                val toolsArray = json.getAsJsonArray("tools")
-                if (toolsArray != null) {
-                    for (tool in toolsArray) {
-                        val obj = tool.asJsonObject
-                        tools.add(ToolStatus(
-                            displayName = obj.get("displayName")?.asString ?: "Unknown",
-                            installed = obj.get("found")?.asBoolean ?: false,
-                            version = if (obj.get("found")?.asBoolean == true)
-                                obj.get("version")?.asString ?: "Installed"
-                            else "Not installed"
-                        ))
-                    }
-                }
-                return tools
-            }
-        } catch (_: Exception) {
-            // Fall through to basic checks
+        val tools = mutableListOf(ToolStatus("Cosmos Tools", true, getCosmosToolsVersion() ?: "Installed"))
+        data.getAsJsonArray("tools")?.forEach { element ->
+            val tool = element.asJsonObject
+            val found = tool.get("found")?.asBoolean ?: false
+            tools += ToolStatus(
+                displayName = tool.get("displayName")?.asString ?: "Unknown",
+                installed = found,
+                version = if (found) tool.get("version")?.takeIf { !it.isJsonNull }?.asString ?: "Installed" else "Not installed"
+            )
         }
-
-        // Fallback
-        tools.add(ToolStatus("Cosmos Tools", true, "Installed (check failed)"))
-        tools.add(checkCommand("dotnet", "dotnet --version", ".NET SDK"))
-        tools.add(checkCommand("qemu-system-x86_64", "qemu-system-x86_64 --version", "QEMU x64"))
-        tools.add(checkCommand("qemu-system-aarch64", "qemu-system-aarch64 --version", "QEMU ARM64"))
-        tools.add(checkCommand("gdb", "gdb --version", "GDB Debugger"))
-
         return tools
-    }
-
-    private fun checkCommand(name: String, command: String, displayName: String): ToolStatus {
-        return try {
-            val output = PlatformUtil.execCommand(command, timeoutMs = 5000)
-            if (output != null) {
-                ToolStatus(displayName, true, output.lines().firstOrNull()?.trim() ?: "Installed")
-            } else {
-                ToolStatus(displayName, false, "Not installed")
-            }
-        } catch (_: Exception) {
-            ToolStatus(displayName, false, "Not installed")
-        }
     }
 
     private fun findCsprojFiles(dir: File, depth: Int = 0): List<File> {
         if (depth > 3) return emptyList()
         val results = mutableListOf<File>()
-        try {
-            val entries = dir.listFiles() ?: return emptyList()
-            for (entry in entries) {
-                if (entry.isFile && entry.name.endsWith(".csproj")) {
-                    results.add(entry)
-                } else if (entry.isDirectory
-                    && !entry.name.startsWith(".")
-                    && entry.name != "node_modules"
-                    && entry.name != "bin"
-                    && entry.name != "obj"
-                ) {
-                    results.addAll(findCsprojFiles(entry, depth + 1))
-                }
-            }
+        val entries = try {
+            dir.listFiles() ?: return emptyList()
         } catch (_: Exception) {
-            // Ignore permission errors
+            return emptyList()
+        }
+        for (entry in entries.sortedBy { it.name }) {
+            if (entry.isFile && entry.name.endsWith(".csproj")) {
+                results += entry
+            } else if (entry.isDirectory &&
+                !entry.name.startsWith(".") &&
+                entry.name != "node_modules" &&
+                entry.name != "bin" &&
+                entry.name != "obj"
+            ) {
+                results += findCsprojFiles(entry, depth + 1)
+            }
         }
         return results
     }
 
-    private fun isCosmosProject(csproj: File): Boolean {
+    private fun isCosmosCsproj(csproj: File): Boolean {
         return try {
             val content = csproj.readText()
             content.contains("Cosmos.Sdk") || content.contains("Cosmos.Kernel")

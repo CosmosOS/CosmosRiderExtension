@@ -1,17 +1,28 @@
 package com.cosmosos.rider.util
 
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.intellij.execution.configurations.GeneralCommandLine
 import com.intellij.openapi.util.SystemInfo
+import com.intellij.util.EnvironmentUtil
 import java.io.File
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 
 object PlatformUtil {
 
     val dotnetToolsDir: String
         get() = Path.of(System.getProperty("user.home"), ".dotnet", "tools").toString()
 
-    val cosmosExecutable: String
-        get() = if (SystemInfo.isWindows) "cosmos.exe" else "cosmos"
+    // Where the Cosmos installer drops QEMU, GDB, LLVM and friends.
+    private val cosmosInstallerToolsDir: String
+        get() = if (SystemInfo.isWindows) {
+            val localAppData = System.getenv("LOCALAPPDATA")
+                ?: Path.of(System.getProperty("user.home"), "AppData", "Local").toString()
+            Path.of(localAppData, "Cosmos", "Tools").toString()
+        } else {
+            Path.of(System.getProperty("user.home"), ".cosmos", "tools").toString()
+        }
 
     val cosmosToolsPath: String?
         get() {
@@ -27,13 +38,6 @@ object PlatformUtil {
     val isCosmosToolsInstalled: Boolean
         get() = cosmosToolsPath != null
 
-    val qemuDisplay: String
-        get() = when {
-            SystemInfo.isWindows -> "sdl"
-            SystemInfo.isMac -> "cocoa"
-            else -> "gtk"
-        }
-
     val platformName: String
         get() = when {
             SystemInfo.isWindows -> "Windows"
@@ -41,95 +45,117 @@ object PlatformUtil {
             else -> "Linux"
         }
 
+    // PATH with the dotnet global tools and every Cosmos installer tool
+    // directory prepended, so tools are found even when the shell that started
+    // the IDE predates the install.
+    val pathWithCosmosTools: String
+        get() {
+            val tools = cosmosInstallerToolsDir
+            val extraPaths = listOf(
+                dotnetToolsDir,
+                Path.of(tools, "bin").toString(),
+                Path.of(tools, "llvm-tools", "bin").toString(),
+                Path.of(tools, "yasm").toString(),
+                Path.of(tools, "xorriso").toString(),
+                Path.of(tools, "lld").toString(),
+                Path.of(tools, "x86_64-elf-tools", "bin").toString(),
+                Path.of(tools, "aarch64-elf-tools", "bin").toString(),
+                // The QEMU bundle keeps its executables in bin/ so QEMU's
+                // <exec>/../share/qemu BIOS lookup resolves; the bare qemu
+                // entry covers installs that predate that layout.
+                Path.of(tools, "qemu", "bin").toString(),
+                Path.of(tools, "qemu").toString(),
+                // The gdb-multiarch zip extracts to gdb/bin, DLLs included.
+                Path.of(tools, "gdb", "bin").toString()
+            )
+            val currentPath = EnvironmentUtil.getValue("PATH") ?: System.getenv("PATH") ?: ""
+            return (extraPaths + currentPath).joinToString(File.pathSeparator)
+        }
+
     fun getEnvWithDotnetTools(): Map<String, String> {
         val env = System.getenv().toMutableMap()
-        val separator = if (SystemInfo.isWindows) ";" else ":"
-        val currentPath = env["PATH"] ?: ""
-        env["PATH"] = "$dotnetToolsDir$separator$currentPath"
+        env.keys.filter { it.equals("PATH", ignoreCase = true) }.forEach { env.remove(it) }
+        env["PATH"] = pathWithCosmosTools
         return env
     }
 
     fun createCommandLine(executable: String, vararg args: String): GeneralCommandLine {
-        return GeneralCommandLine(executable, *args).apply {
-            environment.putAll(getEnvWithDotnetTools())
-        }
+        return GeneralCommandLine(executable, *args)
+            .withEnvironment("PATH", pathWithCosmosTools)
+            .withCharset(Charsets.UTF_8)
     }
 
     fun findCommand(name: String): String? {
-        return try {
-            val cmd = if (SystemInfo.isWindows) "where $name" else "which $name"
-            val process = ProcessBuilder(if (SystemInfo.isWindows) listOf("cmd.exe", "/c", cmd) else listOf("/bin/sh", "-c", cmd))
-                .apply { environment().putAll(getEnvWithDotnetTools()) }
-                .start()
-            val output = process.inputStream.bufferedReader().readLine()?.trim()
-            if (process.waitFor() == 0 && !output.isNullOrBlank()) output else null
-        } catch (_: Exception) {
-            null
+        val names = if (SystemInfo.isWindows) listOf("$name.exe", "$name.cmd", "$name.bat", name) else listOf(name)
+        for (dir in pathWithCosmosTools.split(File.pathSeparator)) {
+            if (dir.isBlank()) continue
+            for (candidate in names) {
+                val file = File(dir, candidate)
+                if (file.isFile && file.canExecute()) return file.absolutePath
+            }
         }
+        return null
     }
 
     fun execCommand(command: String, workDir: String? = null, timeoutMs: Long = 5000): String? {
         return try {
             val shell = if (SystemInfo.isWindows) listOf("cmd.exe", "/c") else listOf("/bin/sh", "-c")
-            val pb = ProcessBuilder(shell + command)
+            val process = ProcessBuilder(shell + command)
                 .apply {
                     environment().putAll(getEnvWithDotnetTools())
                     if (workDir != null) directory(File(workDir))
                     redirectErrorStream(true)
                 }
-            val process = pb.start()
-            val output = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-            if (process.exitValue() == 0) output else null
+                .start()
+            process.outputStream.close()
+            // Drain on a side thread so a chatty command can't fill the pipe
+            // and stall past the timeout.
+            val output = StringBuilder()
+            val reader = Thread {
+                runCatching { output.append(process.inputStream.bufferedReader().readText()) }
+            }.apply { isDaemon = true; start() }
+            if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
+                process.destroyForcibly()
+                return null
+            }
+            reader.join(1000)
+            if (process.exitValue() == 0) output.toString().trim() else null
         } catch (_: Exception) {
             null
         }
     }
 
-    data class PlatformInfo(
-        val platform: String,
-        val platformName: String,
-        val arch: String,
-        val qemuDisplay: String,
-        val gdbCommand: String,
-        val arm64UefiBios: String?
-    )
+    // Cached `cosmos check --json` result. Filled lazily and by the Tools
+    // panel's refresh; the debugger reads the gdb-multiarch path out of it.
+    @Volatile
+    private var cachedToolsCheck: JsonObject? = null
 
-    private var cachedPlatformInfo: PlatformInfo? = null
+    fun getToolsCheck(): JsonObject? {
+        cachedToolsCheck?.let { return it }
+        return refreshToolsCheck()
+    }
 
-    fun getPlatformInfo(): PlatformInfo {
-        cachedPlatformInfo?.let { return it }
+    fun refreshToolsCheck(): JsonObject? {
+        cachedToolsCheck = null
+        if (!isCosmosToolsInstalled) return null
+        val result = execCommand("cosmos check --json", timeoutMs = 10000) ?: return null
+        return try {
+            JsonParser.parseString(result).asJsonObject.also { cachedToolsCheck = it }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
-        if (isCosmosToolsInstalled) {
-            try {
-                val result = execCommand("cosmos info --json")
-                if (result != null) {
-                    val json = com.google.gson.JsonParser.parseString(result).asJsonObject
-                    val info = PlatformInfo(
-                        platform = json.get("platform")?.asString ?: platformName.lowercase(),
-                        platformName = json.get("platformName")?.asString ?: platformName,
-                        arch = json.get("arch")?.asString ?: System.getProperty("os.arch"),
-                        qemuDisplay = json.get("qemuDisplay")?.asString ?: qemuDisplay,
-                        gdbCommand = json.get("gdbCommand")?.asString ?: "gdb",
-                        arm64UefiBios = json.get("arm64UefiBios")?.asString
-                    )
-                    cachedPlatformInfo = info
-                    return info
-                }
-            } catch (_: Exception) {
-                // Fall through
+    private fun findToolPath(name: String): String? {
+        val tools = getToolsCheck()?.getAsJsonArray("tools") ?: return null
+        for (element in tools) {
+            val tool = element.asJsonObject
+            if (tool.get("name")?.asString == name && tool.get("found")?.asBoolean == true) {
+                return tool.get("path")?.takeIf { !it.isJsonNull }?.asString
             }
         }
-
-        val info = PlatformInfo(
-            platform = platformName.lowercase(),
-            platformName = platformName,
-            arch = if (System.getProperty("os.arch") == "aarch64") "arm64" else "x64",
-            qemuDisplay = qemuDisplay,
-            gdbCommand = "gdb",
-            arm64UefiBios = null
-        )
-        cachedPlatformInfo = info
-        return info
+        return null
     }
+
+    fun getGdbPath(): String? = findToolPath("gdb-multiarch")
 }

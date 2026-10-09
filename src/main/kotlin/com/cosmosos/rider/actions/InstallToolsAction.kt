@@ -1,30 +1,31 @@
 package com.cosmosos.rider.actions
 
-import com.cosmosos.rider.services.CosmosProcessService
+import com.cosmosos.rider.services.CosmosProjectService
 import com.cosmosos.rider.util.PlatformUtil
-import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.ui.Messages
+import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.project.Project
 
-class InstallToolsAction : AnAction() {
+class InstallToolsAction : DumbAwareAction() {
+    override fun getActionUpdateThread() = ActionUpdateThread.BGT
+
     override fun actionPerformed(e: AnActionEvent) {
-        val project = e.project ?: return
+        install(e.project ?: return)
+    }
 
-        if (!PlatformUtil.isCosmosToolsInstalled) {
-            Messages.showInfoMessage(
-                project,
-                "First install Cosmos Tools by running in a terminal:\n\ndotnet tool install -g Cosmos.Tools\n\nThen run this action again.",
-                "Install Cosmos Tools"
-            )
-            return
+    companion object {
+        // Installs Cosmos.Tools first when it's missing, then the toolchain.
+        // Runs in a pseudo-terminal so `cosmos install` can prompt.
+        fun install(project: Project) {
+            val command = if (PlatformUtil.isCosmosToolsInstalled) {
+                "cosmos install"
+            } else {
+                "dotnet tool install -g Cosmos.Tools && cosmos install"
+            }
+            CosmosCommands.runInstaller(project, "Install Development Tools", command) {
+                CosmosProjectService.getInstance(project).fireToolsChanged()
+            }
         }
-
-        val cosmosPath = PlatformUtil.findCommand("cosmos") ?: "cosmos"
-        val processService = CosmosProcessService.getInstance(project)
-        processService.runProcess(
-            title = "Install Development Tools",
-            executable = cosmosPath,
-            args = listOf("install")
-        )
     }
 }

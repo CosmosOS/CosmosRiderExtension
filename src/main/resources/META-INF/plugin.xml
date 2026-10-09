@@ -18,18 +18,19 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <projectService
-            serviceImplementation="com.cosmosos.rider.services.CosmosProjectService"/>
-
         <toolWindow
             id="Cosmos"
             anchor="right"
-            icon="AllIcons.Nodes.Module"
+            icon="/icons/cosmos.svg"
             factoryClass="com.cosmosos.rider.toolwindow.CosmosToolWindowFactory"
             conditionClass="com.cosmosos.rider.toolwindow.CosmosToolWindowCondition"/>
 
         <postStartupActivity
             implementation="com.cosmosos.rider.CosmosStartupActivity"/>
+
+        <notificationGroup id="Cosmos OS" displayType="BALLOON"/>
+
+        <configurationType implementation="com.cosmosos.rider.run.CosmosRunConfigurationType"/>
     </extensions>
 
     <actions>
@@ -44,23 +45,18 @@
             <separator/>
             <action id="Cosmos.Build"
                     class="com.cosmosos.rider.actions.BuildAction"
-                    text="Build"
+                    text="Build Kernel"
                     description="Build the kernel project"
                     icon="AllIcons.Actions.Compile"/>
             <action id="Cosmos.Run"
                     class="com.cosmosos.rider.actions.RunAction"
-                    text="Run"
+                    text="Run in QEMU"
                     description="Run the kernel in QEMU"
                     icon="AllIcons.Actions.Execute"/>
-            <action id="Cosmos.Debug"
-                    class="com.cosmosos.rider.actions.DebugAction"
-                    text="Debug"
-                    description="Debug the kernel with GDB"
-                    icon="AllIcons.Actions.StartDebugger"/>
             <separator/>
             <action id="Cosmos.Clean"
                     class="com.cosmosos.rider.actions.CleanAction"
-                    text="Clean"
+                    text="Clean Build"
                     description="Remove build outputs"
                     icon="AllIcons.Actions.GC"/>
             <action id="Cosmos.Properties"
