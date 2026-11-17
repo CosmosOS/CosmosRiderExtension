@@ -10,11 +10,11 @@ class PropertiesAction : CosmosProjectAction() {
         val project = e.project ?: return
         val info = CosmosCommands.projectInfoOrError(project, "Properties Error") ?: return
         val props = try {
-            ProjectConfig.parseProjectProperties(info.csprojPath)
+            ProjectConfig.parseProjectProperties(info.projectFile)
         } catch (ex: Exception) {
-            Messages.showErrorDialog(project, "Failed to read ${info.csprojPath}: ${ex.message}", "Properties Error")
+            Messages.showErrorDialog(project, "Failed to read ${info.projectFile}: ${ex.message}", "Properties Error")
             return
         }
-        PropertiesDialog(project, info.csprojPath, props).show()
+        PropertiesDialog(project, info.projectFile, props).show()
     }
 }

@@ -1,12 +1,12 @@
 # Cosmos OS for Rider
 
-JetBrains Rider plugin for [Cosmos gen3](https://github.com/valentinbreiz/nativeaot-patcher), the NativeAOT-based C# kernel framework. Create, build, run and debug a kernel without leaving the IDE.
+JetBrains Rider plugin for [Cosmos gen3](https://github.com/valentinbreiz/nativeaot-patcher), the NativeAOT-based kernel framework. Create, build, run and debug a C# or Visual Basic kernel without leaving the IDE.
 
 ## Features
 
 Available from the **Cosmos** menu, the **Cosmos** tool window and the Run/Debug toolbar:
 
-- New kernel project from the `cosmos new` template
+- New kernel project in C# or Visual Basic, from the `cosmos-kernel-csharp` and `cosmos-kernel-vb` templates
 - Build the kernel and run it in QEMU through `cosmos run`
 - Debug with GDB: C# breakpoints, stepping, call stack, variables, watches and evaluation
 - Live kernel diagnostics while debugging: threads, GC and memory (with a page map)

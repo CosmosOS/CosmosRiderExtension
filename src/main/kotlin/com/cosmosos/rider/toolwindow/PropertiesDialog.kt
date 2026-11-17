@@ -30,6 +30,7 @@ import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.ListTableModel
 import java.awt.Component
 import java.awt.event.ActionEvent
+import java.io.File
 import javax.swing.AbstractAction
 import javax.swing.Action
 import javax.swing.DefaultCellEditor
@@ -42,7 +43,7 @@ import javax.swing.table.TableCellRenderer
 
 class PropertiesDialog(
     private val project: Project,
-    private val csprojPath: String,
+    private val projectFile: String,
     private val props: ProjectProperties
 ) : DialogWrapper(project) {
 
@@ -326,10 +327,10 @@ class PropertiesDialog(
         }
     }
 
-    override fun createLeftSideActions(): Array<Action> = arrayOf(object : AbstractAction("Open .csproj") {
+    override fun createLeftSideActions(): Array<Action> = arrayOf(object : AbstractAction("Open ${File(projectFile).name}") {
         override fun actionPerformed(e: ActionEvent) {
             doCancelAction()
-            LocalFileSystem.getInstance().refreshAndFindFileByPath(csprojPath)?.let {
+            LocalFileSystem.getInstance().refreshAndFindFileByPath(projectFile)?.let {
                 OpenFileDescriptor(project, it).navigate(true)
             }
         }
@@ -383,8 +384,8 @@ class PropertiesDialog(
             qemu = currentQemu()
         )
         try {
-            ProjectConfig.saveProjectProperties(csprojPath, updated)
-            ProjectConfig.saveQemuConfig(java.io.File(csprojPath).parent, updated.qemu)
+            ProjectConfig.saveProjectProperties(projectFile, updated)
+            ProjectConfig.saveQemuConfig(File(projectFile).parent, updated.qemu)
         } catch (e: Exception) {
             Messages.showErrorDialog(project, "Failed to save: ${e.message}", "Project Properties")
             return
