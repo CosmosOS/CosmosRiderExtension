@@ -8,7 +8,7 @@ object KernelProject {
 
     // The project files a kernel can have, in the order `cosmos build`
     // searches a directory: C#, then Visual Basic.
-    val projectExtensions = listOf(".csproj", ".vbproj")
+    val projectExtensions = KernelLanguage.entries.map { it.projectExtension }
 
     fun isProjectFile(file: File): Boolean = file.isFile && projectExtensions.any { file.name.endsWith(it) }
 

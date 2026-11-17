@@ -2,6 +2,8 @@ package com.cosmosos.rider.actions
 
 import com.cosmosos.rider.services.CosmosProjectService
 import com.cosmosos.rider.util.CosmosNotifications
+import com.cosmosos.rider.util.KernelLanguage
+import com.cosmosos.rider.util.KernelTemplates
 import com.cosmosos.rider.util.PlatformUtil
 import com.cosmosos.rider.util.ProjectConfig
 import com.intellij.ide.impl.ProjectUtil
@@ -50,13 +52,13 @@ class NewProjectAction : DumbAwareAction() {
             return
         }
 
-        val templatesInstalled = ProgressManager.getInstance().runProcessWithProgressSynchronously(
-            ThrowableComputable<Boolean, RuntimeException> {
-                PlatformUtil.execCommand("dotnet new list cosmos-kernel", timeoutMs = 30000)?.contains("cosmos-kernel") == true
+        val templates = ProgressManager.getInstance().runProcessWithProgressSynchronously(
+            ThrowableComputable<Set<String>, RuntimeException> {
+                KernelTemplates.installed(PlatformUtil.execCommand("dotnet new list ${KernelTemplates.LIST_FILTER}", timeoutMs = 30000))
             },
             "Checking Cosmos templates", true, project
         )
-        if (!templatesInstalled) {
+        if (templates.isEmpty()) {
             if (project != null) {
                 CosmosCommands.runInstaller(project, "Cosmos Setup", "dotnet new install Cosmos.Build.Templates")
                 Messages.showInfoMessage(
@@ -84,6 +86,44 @@ class NewProjectAction : DumbAwareAction() {
                 override fun canClose(inputString: String) = checkInput(inputString)
             }
         ) ?: return
+
+        val languages = KernelLanguage.entries
+        val languageChoice = Messages.showDialog(
+            project,
+            "Select the kernel language:",
+            "Language",
+            languages.map { it.displayName }.toTypedArray(),
+            0,
+            Messages.getQuestionIcon()
+        )
+        if (languageChoice < 0) return
+        val language = languages[languageChoice]
+
+        val template = language.findTemplate(templates)
+        if (template == null) {
+            // The templates from before the split by language have no Visual Basic one.
+            val update = Messages.showYesNoDialog(
+                project,
+                "The installed Cosmos templates have no ${language.displayName} template. Update Cosmos now?",
+                "Cosmos Update Required",
+                Messages.getWarningIcon()
+            )
+            if (update != Messages.YES) return
+            if (project != null) {
+                CosmosCommands.runInstaller(project, "Cosmos Update", UPDATE_COMMAND)
+                Messages.showInfoMessage(
+                    project,
+                    "Updating Cosmos. Run \"New Kernel Project\" again once the update completes.",
+                    "Update Cosmos"
+                )
+            } else {
+                Messages.showInfoMessage(
+                    "Run the following command in a terminal, then try again:\n\n$UPDATE_COMMAND",
+                    "Update Cosmos"
+                )
+            }
+            return
+        }
 
         val archOptions = arrayOf("x64 — Intel/AMD 64-bit", "arm64 — ARM 64-bit")
         val archChoice = Messages.showDialog(
@@ -127,7 +167,7 @@ class NewProjectAction : DumbAwareAction() {
 
         val result = ProgressManager.getInstance().runProcessWithProgressSynchronously(
             ThrowableComputable<Pair<Int, String>, RuntimeException> {
-                createProject(projectPath, projectName, createInCurrentDir)
+                createProject(projectPath, projectName, template, createInCurrentDir)
             },
             "Creating Cosmos kernel project", false, project
         )
@@ -142,8 +182,8 @@ class NewProjectAction : DumbAwareAction() {
 
         ProjectConfig.writeNewProjectConfig(projectPath, arch)
 
-        val csproj = File(projectPath, "$projectName.csproj")
-        val version = csproj.takeIf { it.isFile }?.readText()
+        val projectFile = File(projectPath, "$projectName${language.projectExtension}")
+        val version = projectFile.takeIf { it.isFile }?.readText()
             ?.let { Regex("""<PackageReference\s+Include="Cosmos.Kernel"\s+Version="([^"]+)"""").find(it)?.groupValues?.get(1) }
         val created = "Cosmos kernel \"$projectName\" created successfully! (Target: $arch${version?.let { ", Cosmos gen3 v$it" } ?: ""})"
 
@@ -152,15 +192,15 @@ class NewProjectAction : DumbAwareAction() {
             CosmosNotifications.info(project, created)
         } else {
             CosmosNotifications.info(project, created)
-            ProjectUtil.openOrImport(Path.of(if (csproj.isFile) csproj.absolutePath else projectPath), project, false)
+            ProjectUtil.openOrImport(Path.of(if (projectFile.isFile) projectFile.absolutePath else projectPath), project, false)
         }
     }
 
-    private fun createProject(projectPath: String, projectName: String, inCurrentDir: Boolean): Pair<Int, String> {
+    private fun createProject(projectPath: String, projectName: String, template: String, inCurrentDir: Boolean): Pair<Int, String> {
         return try {
             File(projectPath).mkdirs()
             // -o . keeps the files in the chosen folder instead of a subfolder.
-            val args = mutableListOf(PlatformUtil.findCommand("dotnet") ?: "dotnet", "new", "cosmos-kernel", "-n", projectName)
+            val args = mutableListOf(PlatformUtil.findCommand("dotnet") ?: "dotnet", "new", template, "-n", projectName)
             if (inCurrentDir) args += listOf("-o", ".")
             args += "--force"
             val process = ProcessBuilder(args)
@@ -185,5 +225,9 @@ class NewProjectAction : DumbAwareAction() {
 
     companion object {
         private val NAME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9_]*$")
+
+        // --no-project: the update runs in the open project's folder, and
+        // would otherwise move that project's version pins too.
+        private const val UPDATE_COMMAND = "cosmos update --no-project"
     }
 }
