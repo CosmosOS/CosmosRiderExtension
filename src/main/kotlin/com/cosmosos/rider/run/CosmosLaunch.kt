@@ -2,6 +2,7 @@ package com.cosmosos.rider.run
 
 import com.cosmosos.rider.services.CosmosProjectService
 import com.cosmosos.rider.util.KernelArtifacts
+import com.cosmosos.rider.util.KernelProject
 import com.cosmosos.rider.util.PlatformUtil
 import com.cosmosos.rider.util.ProjectConfig
 import com.cosmosos.rider.util.ProjectProperties
@@ -16,7 +17,7 @@ import java.io.File
 // kernel picked in the Tests tab).
 data class KernelTarget(
     val name: String,
-    val csprojPath: String,
+    val projectFile: String,
     val projectDir: String,
     val arch: String,
     // Repo root holding the artifacts/ directory Cosmos.Sdk writes to.
@@ -37,11 +38,11 @@ object CosmosLaunch {
 
     fun resolveTargetOrNull(project: Project, config: CosmosRunConfiguration): KernelTarget? {
         if (config.projectDir.isNotEmpty() && config.kernelName.isNotEmpty()) {
-            val csproj = File(config.projectDir, "${config.kernelName}.csproj")
-            if (csproj.isFile) {
+            val projectFile = KernelProject.named(File(config.projectDir), config.kernelName)
+            if (projectFile != null) {
                 return KernelTarget(
                     name = config.kernelName,
-                    csprojPath = csproj.absolutePath,
+                    projectFile = projectFile.absolutePath,
                     projectDir = config.projectDir,
                     arch = config.arch.ifEmpty { "x64" },
                     rootDir = project.basePath
@@ -51,7 +52,7 @@ object CosmosLaunch {
         val info = CosmosProjectService.getInstance(project).getProjectInfo() ?: return null
         return KernelTarget(
             name = info.name,
-            csprojPath = info.csprojPath,
+            projectFile = info.projectFile,
             projectDir = info.projectDir,
             arch = config.arch.ifEmpty { info.arch },
             rootDir = project.basePath
@@ -89,7 +90,7 @@ object CosmosLaunch {
         if (debug) args += "--debug"
 
         val props = try {
-            ProjectConfig.parseProjectProperties(target.csprojPath)
+            ProjectConfig.parseProjectProperties(target.projectFile)
         } catch (e: Exception) {
             notes += "Could not read project properties (${e.message}); using defaults."
             null

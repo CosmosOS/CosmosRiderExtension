@@ -48,9 +48,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * A Cosmos kernel debug session: `cosmos run --debug` boots the kernel with
  * QEMU's gdbstub waiting on port 1234, gdb attaches to it over MI, and Rider's
- * C# line breakpoints become gdb breakpoints (NativeAOT emits DWARF that maps
- * the kernel back to its .cs sources). A QMP socket alongside feeds the live
- * kernel views without pausing the guest.
+ * .NET line breakpoints, the ones it sets in C# and Visual Basic files, become
+ * gdb breakpoints (NativeAOT emits DWARF that maps the kernel back to its
+ * sources). A QMP socket alongside feeds the live kernel views without pausing
+ * the guest.
  */
 class CosmosDebugProcess(
     session: XDebugSession,
@@ -157,7 +158,7 @@ class CosmosDebugProcess(
         log("> ${spec.commandLine.commandLineString}")
         spec.notes.forEach(::log)
         if (breakpointHandlers.isEmpty()) {
-            log("Rider's C# line breakpoint type was not found; breakpoints won't reach gdb.")
+            log("Rider's .NET line breakpoint type was not found; breakpoints won't reach gdb.")
         }
 
         // Attach as soon as QEMU's gdbstub listens.

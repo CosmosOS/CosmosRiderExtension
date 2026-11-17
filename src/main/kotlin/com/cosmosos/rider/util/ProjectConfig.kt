@@ -325,8 +325,8 @@ object ProjectConfig {
         writeConfigJson(projectDir, config)
     }
 
-    fun parseProjectProperties(csprojPath: String): ProjectProperties {
-        val file = File(csprojPath)
+    fun parseProjectProperties(projectFile: String): ProjectProperties {
+        val file = File(projectFile)
         val content = file.readText()
         val name = file.nameWithoutExtension
         val projectDir = file.parent
@@ -367,8 +367,8 @@ object ProjectConfig {
         )
     }
 
-    fun saveProjectProperties(csprojPath: String, props: ProjectProperties) {
-        val file = File(csprojPath)
+    fun saveProjectProperties(projectFile: String, props: ProjectProperties) {
+        val file = File(projectFile)
         var content = file.readText()
 
         // Replacement text is escaped (or produced by a lambda) so a '$' or
@@ -393,7 +393,7 @@ object ProjectConfig {
 
         setProperty("TargetFramework", props.targetFramework.ifEmpty { "net10.0" })
 
-        // The architecture lives in .cosmos/config.json, not the csproj.
+        // The architecture lives in .cosmos/config.json, not the project file.
         saveTargetArch(file.parent, props.targetArch)
 
         if (props.kernelClass.isNotEmpty()) setProperty("CosmosKernelClass", props.kernelClass)

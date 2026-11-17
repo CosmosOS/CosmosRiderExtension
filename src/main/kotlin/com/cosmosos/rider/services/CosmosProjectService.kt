@@ -1,5 +1,6 @@
 package com.cosmosos.rider.services
 
+import com.cosmosos.rider.util.KernelProject
 import com.cosmosos.rider.util.PlatformUtil
 import com.cosmosos.rider.util.ProjectConfig
 import com.intellij.openapi.components.Service
@@ -10,7 +11,7 @@ import java.io.File
 data class ProjectInfo(
     val name: String,
     val arch: String,
-    val csprojPath: String,
+    val projectFile: String,
     val projectDir: String
 )
 
@@ -38,31 +39,31 @@ class CosmosProjectService(private val project: Project) {
     // Action updates ask on every repaint; the directory walk is cached so
     // that stays cheap. An empty string means "scanned, nothing found".
     @Volatile
-    private var cachedCsproj: Pair<Long, String>? = null
+    private var cachedProjectFile: Pair<Long, String>? = null
 
-    private fun findCosmosCsproj(): String? {
-        cachedCsproj?.let { (at, path) ->
+    private fun findKernelProject(): String? {
+        cachedProjectFile?.let { (at, path) ->
             if (System.currentTimeMillis() - at < SCAN_TTL_MS) return path.ifEmpty { null }
         }
         val basePath = project.basePath
-        val found = basePath?.let { findCsprojFiles(File(it)).firstOrNull(::isCosmosCsproj)?.absolutePath }
-        cachedCsproj = System.currentTimeMillis() to (found ?: "")
+        val found = basePath?.let { KernelProject.find(File(it))?.absolutePath }
+        cachedProjectFile = System.currentTimeMillis() to (found ?: "")
         return found
     }
 
-    fun isCosmosProject(): Boolean = findCosmosCsproj() != null
+    fun isCosmosProject(): Boolean = findKernelProject() != null
 
     fun getProjectInfo(): ProjectInfo? {
-        val csproj = File(findCosmosCsproj() ?: return null)
-        if (!csproj.isFile) {
-            cachedCsproj = null
+        val projectFile = File(findKernelProject() ?: return null)
+        if (!projectFile.isFile) {
+            cachedProjectFile = null
             return null
         }
-        val projectDir = csproj.parent
+        val projectDir = projectFile.parent
         return ProjectInfo(
-            name = csproj.nameWithoutExtension,
+            name = projectFile.nameWithoutExtension,
             arch = ProjectConfig.loadTargetArch(projectDir),
-            csprojPath = csproj.absolutePath,
+            projectFile = projectFile.absolutePath,
             projectDir = projectDir
         )
     }
@@ -70,7 +71,7 @@ class CosmosProjectService(private val project: Project) {
     // Tells the tool window (and anything else listening) that the project
     // or its properties changed.
     fun fireProjectChanged() {
-        cachedCsproj = null
+        cachedProjectFile = null
         project.messageBus.syncPublisher(TOPIC).projectChanged()
     }
 
@@ -112,37 +113,5 @@ class CosmosProjectService(private val project: Project) {
             )
         }
         return tools
-    }
-
-    private fun findCsprojFiles(dir: File, depth: Int = 0): List<File> {
-        if (depth > 3) return emptyList()
-        val results = mutableListOf<File>()
-        val entries = try {
-            dir.listFiles() ?: return emptyList()
-        } catch (_: Exception) {
-            return emptyList()
-        }
-        for (entry in entries.sortedBy { it.name }) {
-            if (entry.isFile && entry.name.endsWith(".csproj")) {
-                results += entry
-            } else if (entry.isDirectory &&
-                !entry.name.startsWith(".") &&
-                entry.name != "node_modules" &&
-                entry.name != "bin" &&
-                entry.name != "obj"
-            ) {
-                results += findCsprojFiles(entry, depth + 1)
-            }
-        }
-        return results
-    }
-
-    private fun isCosmosCsproj(csproj: File): Boolean {
-        return try {
-            val content = csproj.readText()
-            content.contains("Cosmos.Sdk") || content.contains("Cosmos.Kernel")
-        } catch (_: Exception) {
-            false
-        }
     }
 }
